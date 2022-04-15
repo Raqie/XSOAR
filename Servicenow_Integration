@@ -1,0 +1,182 @@
+import json
+import urllib3
+import dateparser
+import traceback
+from typing import Any, Dict, Tuple, List, Optional, Union, cast
+import uuid
+import base64
+
+# Disable insecure warnings
+urllib3.disable_warnings()
+
+''' CONSTANTS '''
+params = demisto.params()
+company = demisto.params().get('company')
+u_integration_project_code = demisto.params().get('u_integration_project_code')
+u_wm_environment = demisto.params().get('WMEnvironment')
+uuid_string = str(uuid.uuid1())
+username = params.get('Credentials').get('identifier')
+password = params.get('Credentials').get('password')
+''' CLIENT CLASS '''
+
+class Client(BaseClient):
+    """Client class to interact with the service API"""
+
+    def create_ticket(self, category: str, subcategory: str, contact_type: str, short_description: str, description: str, cmdb_ci: str, assignment_group: str, impact: str, urgency: str) -> Dict[str, Any]:
+        return self._http_request(
+            method='POST',
+            json_data={
+                "u_operation": "Create",
+                "caller_id": "SOARSoap@TfSNow.com",
+                "u_integration_project_code": u_integration_project_code,
+                "correlation_id": uuid_string,
+                "company": company,
+                "category": category,
+                "subcategory": subcategory,
+                "contact_type": contact_type,
+                "short_description": short_description,
+                "description": description,
+                "cmdb_ci": cmdb_ci,
+                "assignment_group": assignment_group,
+                "impact": impact,
+                "urgency": urgency,
+                "u_wm_environment": u_wm_environment,
+                "u_em_environment": "EM-SOAR",
+                "u_reported_by": "SOARSoap@TfSNow.com"
+            }
+        )
+
+    def update_ticket(self, number: str, correlationid: str, assignment_group: str = None, impact: str = None, urgency: str = None, state: str = None, close_code: str = None, close_notes: str = None, comments: str = None) -> Dict[str, Any]:
+        return self._http_request(
+            method='POST',
+            json_data={
+                "u_operation": "Update",
+                "state": state,
+                "u_wm_environment": u_wm_environment,
+                "u_integration_project_code": u_integration_project_code,
+                "number": number,
+                "correlation_id": correlationid,
+                "assignment_group": assignment_group or "",
+                "comments": comments or "",
+                "impact": impact or "",
+                "urgency": urgency or "",
+                "close_code": close_code or "",
+                "close_notes": close_notes or ""
+            }
+        )
+
+    def add_attachment(self, number: str, correlationid: str, u_attachmentname: str, u_attachmentpayload: str):
+        return self._http_request(
+            method='POST',
+            json_data={
+                "u_operation": "Update",
+                "state": "Remark",
+                "number": number,
+                "correlation_id": correlationid,
+                "u_integration_project_code": u_integration_project_code,
+                "u_em_environment": "EM-SOAR",
+                "u_wm_environment": u_wm_environment,
+                "u_attachment": [{
+                    "u_attachmentname": u_attachmentname,
+                    "u_attachmentpayload": u_attachmentpayload
+                }]
+            }
+        )
+
+
+def test_module(client: Client) -> str:
+    # test_result = client.test_function()
+    # return error output that test button function is not implemented
+    return 'ok'
+
+
+def create_ticket_command(client: Client, args: Dict[str, Any]) -> CommandResults:
+    response = client.create_ticket(**args)
+    for k,v in response.items():
+        readable_output = tableToMarkdown('Ticket Info', v)
+
+    return CommandResults(
+        readable_output=readable_output,
+        outputs_prefix='Servicenow.create_ticket_command',
+        outputs_key_field='Ticket',
+        outputs=response
+    )
+
+
+def update_ticket_command(client: Client, args: Dict[str, Any]) -> CommandResults:
+    response = client.update_ticket(**args)
+    for k,v in response.items():
+        readable_output = tableToMarkdown('Ticket Info', v)
+
+    return CommandResults(
+        readable_output=readable_output,
+        outputs_prefix='Servicenow.update_ticket_command',
+        outputs_key_field='Ticket',
+        outputs=response
+    )
+
+def add_attachment_command(client: Client, args: Dict[str, Any]) -> CommandResults:
+    file_info = demisto.getFilePath(args['FileEntryID']) #This chunk of code takes EntryID of File and encodes it on base64
+    file_name, file_path = file_info['name'], file_info['path'] #API only need name and payload(encoded base64 file)
+    with open(file_path, "rb") as f:
+        bytes = f.read()
+        encoded = base64.b64encode(bytes)
+    response = client.add_attachment(args['number'], args['correlationid'], file_name, str(encoded)) #Instead passing all args (**args) I'm passing needed arguments and name and payload from file EntryID
+    for k,v in response.items():
+        readable_output = tableToMarkdown('Ticket Info', v)
+
+    return CommandResults(
+        readable_output=readable_output,
+        outputs_prefix='Servicenow.add_attachment_command',
+        outputs_key_field='Ticket',
+        outputs=response
+    )
+
+''' MAIN FUNCTION '''
+
+def main() -> None:
+    """main function, parses params and runs command functions
+    :return:
+    :rtype:
+    """
+    # get the service API url
+    base_url = demisto.params()['URL']
+    verify_certificate = not demisto.params().get('insecure', False)
+    # if your Client class inherits from BaseClient, system proxy is handled
+    # out of the box by it, just pass ``proxy`` to the Client constructor
+    proxy = demisto.params().get('proxy', False)
+
+    try:
+        headers = {
+            'Content-Type': "application/json"
+        }
+        client = Client(
+            base_url=base_url,
+            verify=verify_certificate,
+            headers=headers,
+            auth=(username, password),
+            proxy=proxy)
+
+        if demisto.command() == 'test-module':
+            result = test_module(client)
+            return_results(result)
+
+        elif demisto.command() == 'servicenow-create-ticket':
+            return_results(create_ticket_command(client, demisto.args()))
+
+        elif demisto.command() == 'servicenow-update-ticket':
+            return_results(update_ticket_command(client, demisto.args()))
+
+        elif demisto.command() == 'servicenow-add-attachment':
+            return_results(add_attachment_command(client, demisto.args()))
+    # Log exceptions and return errors
+    except Exception as e:
+        demisto.error(traceback.format_exc())  # print the traceback
+        return_error(
+            f'Failed to execute {demisto.command()} command.\nError:\n{str(e)}')
+
+
+''' ENTRY POINT '''
+
+if __name__ in ('__main__', '__builtin__', 'builtins'):
+    main()
