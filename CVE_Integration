@@ -1,0 +1,253 @@
+import json
+import urllib3
+import dateparser
+import traceback
+from typing import Any, Dict, Tuple, List, Optional, Union, cast
+
+# Disable insecure warnings
+urllib3.disable_warnings()
+
+''' CONSTANTS '''
+
+DATE_FORMAT = '%Y-%m-%dT%H:%M:%SZ'
+
+''' CLIENT CLASS '''
+
+class Client(BaseClient):
+    """Client class to interact with the service API"""
+
+    def cve_lookup(self, cve_id: str, output_type: str, tvm_format: str, timeout = (60,600)):
+        if output_type == 'json':
+            return self._http_request(
+                method='POST',
+                url_suffix='/cvelookup',
+                json_data={
+                    "cve_id": cve_id,
+                    "output_type": output_type or "",
+                    "tvm_format": tvm_format or ""
+                },
+                timeout=timeout
+            )
+        else:
+            return self._http_request(
+                method='POST',
+                url_suffix='/cvelookup',
+                json_data={
+                    "cve_id": cve_id,
+                    "output_type": output_type or "",
+                    "tvm_format": tvm_format or ""
+                },
+                timeout=timeout,
+                resp_type='response'
+            )
+
+    def cve_horizonscan(self, time_frame: str, keyword: str = None, severity: str = None, metric: str = None, cwe: str = None, output_type: str = None, tvm_format: str = None, timeout = (60,600)):
+        if output_type == 'json':
+            return self._http_request(
+                method='POST',
+                url_suffix='/cvehorizonscan/',
+                json_data={
+                    "time_frame": time_frame,
+                    "keyword": keyword or "",
+                    "severity": severity or "",
+                    "metric": metric or "",
+                    "cwe": cwe or "",
+                    "output_type": output_type or "",
+                    "tvm_format": tvm_format or ""
+                },
+                timeout=timeout
+            )
+        else:
+            return self._http_request(
+                method='POST',
+                url_suffix='/cvehorizonscan/',
+                json_data={
+                    "time_frame": time_frame,
+                    "keyword": keyword or "",
+                    "severity": severity or "",
+                    "metric": metric or "",
+                    "cwe": cwe or "",
+                    "output_type": output_type or "",
+                    "tvm_format": tvm_format or ""
+                },
+                timeout=timeout,
+                resp_type='response'
+            )
+
+def test_module(client: Client) -> str:
+    response = client.cve_lookup(cve_id= "CVE-2021-44228", output_type="json", tvm_format="False")
+    keys = list(response.keys())
+
+    try:
+        if keys[0] == "CVE-2021-44228":
+            return 'ok'
+        else:
+            return 'Script ran, but failed to return correct output.'
+    except IndexError:
+        return 'Script ran and returned no results.'
+
+
+def lookup_command(client: Client, args: Dict[str, Any]) -> CommandResults:
+    output_type = args.get('output_type')
+    response = client.cve_lookup(args.get('cve_id'), output_type, args.get('tvm_format'))
+
+    if output_type == "xlsx":
+        return_results(fileResult("output.xlsx", response.content))
+    else:
+        list_of_keys = args.get('cve_id').split(",")
+        results = []
+
+        for k,v in response.items():
+            if not 'valid' in v:
+                score = 0
+                if v['attack_complexity'] == 'LOW':
+                    score = 1
+                elif v['attack_complexity'] == 'HIGH':
+                    score = 3
+                v['cve_id'] = k
+                readable_output = tableToMarkdown('Informations',v)
+                outputs = {
+                    "DBotScore":{
+                        'Indicator': k,
+                        'Type': 'CVE',
+                        'Vendor': 'SILO|TVE',
+                        'Score': score,
+                        'Reliability': "F - Reliability cannot be judged" #THIS IS LOOKUP LOGIC
+                    },
+                    "Cve.lookup_command":v
+                }
+                results.append(CommandResults(
+                    readable_output=readable_output,
+                    outputs_key_field='cve_id',
+                    outputs=outputs
+                ))
+            else:
+                v['cve_id'] = k
+                outputs = {"Cve.lookup_command":v}
+                results.append(CommandResults(
+                    readable_output='Not found',
+                    outputs_key_field='cve_id',
+                    outputs=outputs
+                ))
+
+        return results
+
+def horizonscan_command(client: Client, args: Dict[str, Any]) -> CommandResults:
+    output_type = args.get('output_type')
+    response = client.cve_horizonscan(**args)
+    if output_type == "xlsx":
+        return_results(fileResult("output.xlsx", response.content))
+    else:
+        results = []
+        for k,v in response.items():
+            if not 'valid' in v:
+                score = 0
+                if v['attack_complexity'] == 'LOW':
+                    score = 1
+                elif v['attack_complexity'] == 'HIGH':
+                    score = 3
+                v['cve_id'] = k
+                readable_output = tableToMarkdown('Informations',v)
+                outputs = {
+                        "DBotScore":{
+                        'Indicator': k,
+                        'Type': 'CVE',
+                        'Vendor': 'SILO|TVE',
+                        'Score': score,
+                        'Reliability': "F - Reliability cannot be judged"
+                    },
+                    "Cve.horizonscan_command":v
+                }
+                results.append(CommandResults(
+                    readable_output=readable_output,
+                    outputs_key_field='cve_horizonscan',
+                    outputs=outputs
+                ))
+            else:
+                v['cve_id'] = k
+                outputs = {"Cve.horizonscan_command":v}
+                results.append(CommandResults(
+                    readable_output='Not found',
+                    outputs_key_field='cve_horizonscan',
+                    outputs=outputs
+                ))
+
+        return results
+
+
+''' MAIN FUNCTION '''
+
+
+def main() -> None:
+    """main function, parses params and runs command functions
+    :return:
+    :rtype:
+    """
+    api_key = demisto.params().get('apikey')
+    api_key2 = demisto.params().get('apikey2')
+    # get the service API url
+    base_url = demisto.params()['base_url']
+    verify_certificate = not demisto.params().get('insecure', False)
+    # if your Client class inherits from BaseClient, system proxy is handled
+    # out of the box by it, just pass ``proxy`` to the Client constructor
+    proxy = demisto.params().get('proxy', False)
+
+    try:
+        if demisto.args().get('output_type') != 'json':
+            headers = {
+                'x-functions-key': api_key,
+                'Content-Type': "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                'Content-Disposition': 'attachment; filename=sheet.xlsx'
+            }
+            headers2 = {
+                'x-functions-key': api_key2,
+                'Content-Type': "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                'Content-Disposition': 'attachment; filename=sheet.xlsx'
+            }
+        else:
+            headers = {
+                'x-functions-key': api_key,
+                'Content-Type': "application/json"
+            }
+            headers2 = {
+                'x-functions-key': api_key2,
+                'Content-Type': "application/json"
+            }
+
+        client = Client(
+            base_url=base_url,
+            verify=verify_certificate,
+            headers=headers,
+            proxy=proxy)
+        client2 = Client(
+            base_url=base_url,
+            verify=verify_certificate,
+            headers=headers2,
+            proxy=proxy)
+
+        if demisto.command() == 'test-module':
+            result = test_module(client)
+            return_results(result)
+
+        elif demisto.command() == 'cve':
+            if demisto.args().get('output_type') == 'json':
+                return_results(lookup_command(client, demisto.args()))
+            else:
+                lookup_command(client, demisto.args())
+
+        elif demisto.command() == 'horizonscan':
+            if demisto.args().get('output_type') == 'json':
+                return_results(horizonscan_command(client2, demisto.args()))
+            else:
+                horizonscan_command(client2, demisto.args())
+
+    # Log exceptions and return errors
+    except Exception as e:
+        demisto.error(traceback.format_exc())  # print the traceback
+        return_error(f'Failed to execute {demisto.command()} command.\nError:\n{str(e)}')
+
+
+''' ENTRY POINT '''
+
+if __name__ in ('__main__', '__builtin__', 'builtins'):
+    main()
